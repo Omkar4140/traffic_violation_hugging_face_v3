@@ -8,6 +8,7 @@ from detectors.helmet import HelmetDetector
 from detectors.license_plate import LicensePlateDetector
 from detectors.speed import SpeedCalculator
 from data.logger import ViolationLogger
+from detectors.violation_line import ViolationLineDetector
 
 class ViolationDetector:
     def __init__(self):
