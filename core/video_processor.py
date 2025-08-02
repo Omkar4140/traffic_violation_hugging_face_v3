@@ -1,7 +1,7 @@
 import cv2
 import os
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 from models.detection_models import ModelManager
 from config.settings import Config
 
@@ -9,9 +9,11 @@ class VideoProcessor:
     def __init__(self, violation_detector):
         self.detector = violation_detector
         self.model_manager = ModelManager()
+        self.vehicle_id_counter = 0
+        self.active_vehicles = {}
     
     def process_video(self, video_path, enable_plate_detection=True):
-        """Process video for violations"""
+        """Process video for violations with enhanced tracking and timeline markers"""
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             return None, [], None
@@ -20,6 +22,17 @@ class VideoProcessor:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        print(f"Processing video: {width}x{height} @ {fps}fps, {total_frames} frames")
+        
+        # Auto-detect violation line from first frame
+        ret, first_frame = cap.read()
+        if ret:
+            auto_line = self.detector.auto_detect_violation_line(first_frame)
+            if auto_line:
+                print(f"Auto-detected violation line: {auto_line}")
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Reset to beginning
         
         # Output video setup
         output_path = os.path.join(Config.TEMP_DIR, "processed_video.mp4")
@@ -28,7 +41,8 @@ class VideoProcessor:
         
         yolo_model = self.model_manager.get_yolo_model()
         frame_count = 0
-        vehicle_trackers = {}
+        violation_frames = []  # Store frame numbers with violations
+        start_time = datetime.now()
         
         try:
             while True:
@@ -36,8 +50,11 @@ class VideoProcessor:
                 if not ret:
                     break
                 
+                # Calculate current timestamp
+                current_time = start_time + timedelta(seconds=frame_count/fps)
+                timestamp = current_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                
                 output_frame = frame.copy()
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
                 
                 # Run YOLO detection
                 results = yolo_model(frame)[0]
@@ -53,7 +70,11 @@ class VideoProcessor:
                     
                     if cls_name in ["car", "truck", "bus", "motorbike", "bicycle"] and conf > Config.VEHICLE_CONFIDENCE_THRESHOLD:
                         center = ((x1 + x2) // 2, (y1 + y2) // 2)
-                        current_detections[len(current_detections)] = {
+                        
+                        # Assign vehicle ID based on proximity to previous detections
+                        vehicle_id = self._assign_vehicle_id(center, frame_count)
+                        
+                        current_detections[vehicle_id] = {
                             'type': cls_name, 'bbox': (x1, y1, x2, y2), 
                             'center': center, 'conf': conf
                         }
@@ -66,32 +87,76 @@ class VideoProcessor:
                 traffic_light_state = self._detect_traffic_light_state(frame, traffic_lights)
                 
                 # Process vehicle violations
-                output_frame = self._process_vehicles(
-                    frame, output_frame, current_detections, vehicle_trackers,
+                has_violations = self._process_vehicles(
+                    frame, output_frame, current_detections,
                     traffic_light_state, timestamp, frame_count, fps, enable_plate_detection
                 )
                 
                 # Process helmet violations
-                output_frame = self._process_helmet_violations(
+                helmet_violations = self._process_helmet_violations(
                     frame, output_frame, person_detections, current_detections, timestamp, frame_count
                 )
                 
-                # Draw violation line
-                if self.detector.violation_line:
-                    self._draw_violation_line(output_frame)
+                # Track violation frames for timeline markers
+                if has_violations or helmet_violations:
+                    violation_frames.append(frame_count)
                 
-                # Add frame info
-                cv2.putText(output_frame, f"Frame: {frame_count} | Light: {traffic_light_state.upper()}", 
-                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                # Draw violation line with enhanced visibility
+                self._draw_violation_line(output_frame)
+                
+                # Add enhanced frame info
+                self._add_frame_info(output_frame, frame_count, total_frames, traffic_light_state, 
+                                   len(current_detections), len(violation_frames))
+                
+                # Add timeline markers for violations (enhanced visibility)
+                if frame_count in violation_frames:
+                    self._add_violation_marker(output_frame, width, height)
                 
                 out.write(output_frame)
                 frame_count += 1
                 
+                # Progress indicator
+                if frame_count % 30 == 0:  # Every 30 frames
+                    progress = (frame_count / total_frames) * 100
+                    print(f"Processing: {progress:.1f}% ({frame_count}/{total_frames})")
+                
         finally:
             cap.release()
             out.release()
+            
+            # Clean up old vehicle tracks
+            current_vehicle_ids = list(current_detections.keys()) if 'current_detections' in locals() else []
+            self.detector.speed_calculator.clear_old_tracks(current_vehicle_ids)
         
-        return output_path, self.detector.logger.get_violations_dataframe(), None
+        print(f"Video processing complete. Found {len(violation_frames)} violation frames.")
+        return output_path, self.detector.logger.get_violations_dataframe(), violation_frames
+    
+    def _assign_vehicle_id(self, center, frame_count):
+        """Assign vehicle ID based on proximity to existing vehicles"""
+        min_distance = float('inf')
+        assigned_id = None
+        
+        # Check proximity to existing vehicles
+        for vehicle_id, vehicle_data in self.active_vehicles.items():
+            if frame_count - vehicle_data['last_seen'] < 10:  # Vehicle seen in last 10 frames
+                distance = np.sqrt((center[0] - vehicle_data['center'][0])**2 + 
+                                 (center[1] - vehicle_data['center'][1])**2)
+                if distance < min_distance and distance < 50:  # Within 50 pixels
+                    min_distance = distance
+                    assigned_id = vehicle_id
+        
+        # Create new vehicle ID if no match found
+        if assigned_id is None:
+            assigned_id = self.vehicle_id_counter
+            self.vehicle_id_counter += 1
+        
+        # Update vehicle tracking
+        self.active_vehicles[assigned_id] = {
+            'center': center,
+            'last_seen': frame_count
+        }
+        
+        return assigned_id
     
     def _detect_traffic_light_state(self, frame, traffic_lights):
         """Detect traffic light state"""
@@ -101,10 +166,12 @@ class VideoProcessor:
                 return state
         return "unknown"
     
-    def _process_vehicles(self, frame, output_frame, current_detections, vehicle_trackers,
+    def _process_vehicles(self, frame, output_frame, current_detections,
                          traffic_light_state, timestamp, frame_count, fps, enable_plate_detection):
         """Process vehicle detections and violations"""
-        for det_id, detection in current_detections.items():
+        has_violations = False
+        
+        for vehicle_id, detection in current_detections.items():
             vehicle_type = detection['type']
             bbox = detection['bbox']
             center = detection['center']
@@ -118,33 +185,41 @@ class VideoProcessor:
             
             repeat_offender = self.detector.logger.is_repeat_offender(license_plate)
             
-            # Speed calculation
+            # Speed calculation with vehicle ID tracking
             speed = 0
-            if det_id in vehicle_trackers:
-                prev_center = vehicle_trackers[det_id]['center']
-                speed = self.detector.speed_calculator.calculate_speed(prev_center, center, fps)
-                
-                # Check for speeding violation
-                if speed > Config.SPEED_LIMIT_KMH:
-                    screenshot_path = self.detector.save_violation_screenshot(
-                        frame, bbox, "speeding", timestamp)
-                    self.detector.logger.log_violation(
-                        timestamp, "speeding_violation", vehicle_type, 
-                        conf, speed, license_plate, frame_count, 
-                        screenshot_path, repeat_offender
+            if vehicle_id in self.active_vehicles:
+                prev_center = self.active_vehicles[vehicle_id].get('prev_center')
+                if prev_center:
+                    speed = self.detector.speed_calculator.calculate_speed(
+                        vehicle_id, prev_center, center, fps, frame_timestamp=datetime.now().timestamp()
                     )
                     
-                    cv2.putText(output_frame, f"SPEEDING: {speed:.1f} km/h", (x1, y2 + 40),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+                    # Check for speeding violation
+                    if speed > Config.SPEED_LIMIT_KMH:
+                        screenshot_path = self.detector.save_violation_screenshot(
+                            frame, bbox, "speeding", timestamp)
+                        self.detector.logger.log_violation(
+                            timestamp, "speeding_violation", vehicle_type, 
+                            conf, speed, license_plate, frame_count, 
+                            screenshot_path, repeat_offender
+                        )
+                        has_violations = True
+                        
+                        # Enhanced speeding violation display
+                        cv2.putText(output_frame, f"SPEEDING: {speed:.1f} km/h", (x1, y2 + 40),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 3)
+                        cv2.rectangle(output_frame, (x1-5, y1-5), (x2+5, y2+5), (255, 0, 0), 3)
             
-            # Update tracker
-            vehicle_trackers[det_id] = {'center': center, 'type': vehicle_type}
+            # Update vehicle tracking
+            if vehicle_id in self.active_vehicles:
+                self.active_vehicles[vehicle_id]['prev_center'] = center
             
-            # Draw bounding box
+            # Draw bounding box with enhanced colors
             color = (0, 0, 255) if repeat_offender else (0, 255, 0)
-            cv2.rectangle(output_frame, (x1, y1), (x2, y2), color, 2)
+            thickness = 3 if repeat_offender else 2
+            cv2.rectangle(output_frame, (x1, y1), (x2, y2), color, thickness)
             
-            # Create label
+            # Create enhanced label
             label = f"{vehicle_type} {conf:.2f}"
             if speed > 0:
                 label += f" {speed:.1f}km/h"
@@ -153,8 +228,11 @@ class VideoProcessor:
             if repeat_offender:
                 label += " [REPEAT]"
             
+            # Draw label with background for better visibility
+            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+            cv2.rectangle(output_frame, (x1, y1 - 25), (x1 + label_size[0], y1), color, -1)
             cv2.putText(output_frame, label, (x1, y1 - 10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             
             # Check for red light violation
             if self.detector.violation_line and traffic_light_state == "red":
@@ -166,16 +244,20 @@ class VideoProcessor:
                         conf, speed, license_plate, frame_count, 
                         screenshot_path, repeat_offender
                     )
+                    has_violations = True
                     
-                    cv2.circle(output_frame, center, 15, (0, 0, 255), -1)
+                    # Enhanced red light violation display
+                    cv2.circle(output_frame, center, 20, (0, 0, 255), -1)
                     cv2.putText(output_frame, "RED LIGHT VIOLATION", (x1, y2 + 25),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 3)
         
-        return output_frame
+        return has_violations
     
     def _process_helmet_violations(self, frame, output_frame, person_detections, 
                                  current_detections, timestamp, frame_count):
         """Process helmet violations"""
+        has_violations = False
+        
         for person_bbox in person_detections:
             x1, y1, x2, y2 = person_bbox
             person_center = ((x1 + x2) // 2, (y1 + y2) // 2)
@@ -203,14 +285,63 @@ class VideoProcessor:
                         timestamp, "no_helmet_violation", nearby_vehicle, 
                         0.8, 0, "", frame_count, screenshot_path, False
                     )
+                    has_violations = True
                     
-                    cv2.rectangle(output_frame, (x1, y1), (x2, y2), (0, 165, 255), 2)
+                    # Enhanced helmet violation display
+                    cv2.rectangle(output_frame, (x1, y1), (x2, y2), (0, 165, 255), 3)
                     cv2.putText(output_frame, "NO HELMET", (x1, y1 - 10),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 3)
         
-        return output_frame
+        return has_violations
     
     def _draw_violation_line(self, output_frame):
-        """Draw violation line on frame"""
-        (x1, y1), (x2, y2) = self.detector.violation_line
-        cv2.line(output_frame, (x1, y1), (x2, y2), (255, 255, 0), 3)
+        """Draw violation line with enhanced visibility"""
+        line = self.detector.get_violation_line_for_display()
+        if line:
+            (x1, y1), (x2, y2) = line
+            # Draw thicker line with multiple colors for better visibility
+            cv2.line(output_frame, (x1, y1), (x2, y2), (0, 0, 0), 7)  # Black outline
+            cv2.line(output_frame, (x1, y1), (x2, y2), (255, 255, 0), 5)  # Yellow line
+            cv2.line(output_frame, (x1, y1), (x2, y2), (255, 255, 255), 1)  # White center
+            
+            # Add label with background
+            label = "VIOLATION LINE"
+            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
+            label_x = x1
+            label_y = y1 - 20
+            cv2.rectangle(output_frame, (label_x, label_y - 20), 
+                         (label_x + label_size[0], label_y), (0, 0, 0), -1)
+            cv2.putText(output_frame, label, (label_x, label_y - 5),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+    
+    def _add_frame_info(self, output_frame, frame_count, total_frames, traffic_light_state, 
+                       vehicle_count, violation_count):
+        """Add enhanced frame information"""
+        height, width = output_frame.shape[:2]
+        
+        # Create info panel background
+        info_height = 80
+        cv2.rectangle(output_frame, (0, 0), (width, info_height), (0, 0, 0), -1)
+        cv2.rectangle(output_frame, (0, 0), (width, info_height), (255, 255, 255), 2)
+        
+        # Add information text
+        info_lines = [
+            f"Frame: {frame_count}/{total_frames} ({(frame_count/total_frames)*100:.1f}%)",
+            f"Traffic Light: {traffic_light_state.upper()} | Vehicles: {vehicle_count} | Violations: {violation_count}"
+        ]
+        
+        for i, line in enumerate(info_lines):
+            cv2.putText(output_frame, line, (10, 25 + i*25), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    
+    def _add_violation_marker(self, output_frame, width, height):
+        """Add enhanced violation marker for timeline visibility"""
+        # Add bright red border around entire frame
+        cv2.rectangle(output_frame, (0, 0), (width-1, height-1), (0, 0, 255), 8)
+        
+        # Add pulsing violation indicator in top-right corner
+        marker_size = 30
+        cv2.circle(output_frame, (width - 40, 40), marker_size, (0, 0, 255), -1)
+        cv2.circle(output_frame, (width - 40, 40), marker_size//2, (255, 255, 255), -1)
+        cv2.putText(output_frame, "!", (width - 47, 50), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
