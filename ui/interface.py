@@ -189,8 +189,7 @@ def create_interface(image_processor, video_processor):
                                 violations_table = gr.Dataframe(
                                     label="🚨 Detected Violations",
                                     wrap=True,
-                                    interactive=False,
-                                    height=300
+                                    interactive=False
                                 )
                                 csv_download = gr.File(label="📥 Download Complete Log (CSV)")
                             with gr.Column():
@@ -234,8 +233,7 @@ def create_interface(image_processor, video_processor):
                                 violations_table_video = gr.Dataframe(
                                     label="🚨 Detected Violations",
                                     wrap=True,
-                                    interactive=False,
-                                    height=300
+                                    interactive=False
                                 )
                                 csv_download_video = gr.File(label="📥 Download Complete Log (CSV)")
                             with gr.Column():
