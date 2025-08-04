@@ -1,7 +1,6 @@
 import gradio as gr
 import pandas as pd
 import os
-from PIL import Image
 from data.dashboard import ViolationDashboard
 
 class TrafficViolationInterface:
@@ -20,7 +19,7 @@ class TrafficViolationInterface:
             line_coords = self.image_processor.detector.parse_line_coordinates(line_coordinates)
             if line_coords:
                 self.image_processor.detector.set_violation_line(line_coords[0], line_coords[1])
-                status_msg = f"Using manual violation line: {line_coords}"
+                status_msg = f"✅ Using manual violation line: {line_coords}"
             else:
                 # Try auto-detection
                 import cv2
@@ -28,33 +27,38 @@ class TrafficViolationInterface:
                 if frame is not None:
                     auto_line = self.image_processor.detector.auto_detect_violation_line(frame)
                     if auto_line:
-                        status_msg = f"Auto-detected violation line: {auto_line}"
+                        status_msg = f"🤖 Auto-detected violation line: {auto_line}"
                     else:
-                        status_msg = "No violation line detected. Please set manually for red light detection."
+                        status_msg = "⚠️ No violation line detected. Red light detection disabled."
                 else:
-                    status_msg = "Error reading image file."
+                    status_msg = "❌ Error reading image file."
             
             # Process image
             output_path, violations_df, _ = self.image_processor.process_image(
                 image_file, enable_plate_detection
             )
             
-            # Create dashboard
+            # Create dashboard and save CSV
             dashboard_path = None
             csv_path = None
             if not violations_df.empty:
-                dashboard_path = self.dashboard.create_dashboard(
-                    self.image_processor.detector.logger.violations_log
-                )
-                csv_path = self.image_processor.detector.logger.save_violations_to_csv()
-                status_msg += f" | Found {len(violations_df)} violations."
+                try:
+                    dashboard_path = self.dashboard.create_dashboard(
+                        self.image_processor.detector.logger.violations_log
+                    )
+                    csv_path = self.image_processor.detector.logger.save_violations_to_csv()
+                    status_msg += f" | 🚨 Found {len(violations_df)} violations."
+                except Exception as e:
+                    print(f"Error creating dashboard: {e}")
+                    status_msg += f" | Found {len(violations_df)} violations (dashboard error)."
             else:
-                status_msg += " | No violations detected."
+                status_msg += " | ✅ No violations detected."
             
             return output_path, violations_df, dashboard_path, csv_path, status_msg
             
         except Exception as e:
-            error_msg = f"Error processing image: {str(e)}"
+            error_msg = f"❌ Error processing image: {str(e)}"
+            print(f"Image processing error: {e}")
             return None, pd.DataFrame(), None, None, error_msg
     
     def process_video(self, video_file, line_coordinates, enable_plate_detection):
@@ -67,31 +71,37 @@ class TrafficViolationInterface:
             line_coords = self.video_processor.detector.parse_line_coordinates(line_coordinates)
             if line_coords:
                 self.video_processor.detector.set_violation_line(line_coords[0], line_coords[1])
-                status_msg = f"Using manual violation line: {line_coords}"
+                status_msg = f"✅ Using manual violation line: {line_coords}"
             else:
-                status_msg = "Using auto-detected violation line (if found)."
+                status_msg = "🤖 Using auto-detected violation line (if found)."
             
             # Process video
             output_path, violations_df, violation_frames = self.video_processor.process_video(
                 video_file, enable_plate_detection
             )
             
-            # Create dashboard
+            # Create dashboard and save CSV
             dashboard_path = None
             csv_path = None
             if not violations_df.empty:
-                dashboard_path = self.dashboard.create_dashboard(
-                    self.video_processor.detector.logger.violations_log
-                )
-                csv_path = self.video_processor.detector.logger.save_violations_to_csv()
-                status_msg += f" | Found {len(violations_df)} violations in {len(violation_frames) if violation_frames else 0} frames."
+                try:
+                    dashboard_path = self.dashboard.create_dashboard(
+                        self.video_processor.detector.logger.violations_log
+                    )
+                    csv_path = self.video_processor.detector.logger.save_violations_to_csv()
+                    frame_count = len(violation_frames) if violation_frames else 0
+                    status_msg += f" | 🚨 Found {len(violations_df)} violations in {frame_count} frames."
+                except Exception as e:
+                    print(f"Error creating dashboard: {e}")
+                    status_msg += f" | Found {len(violations_df)} violations (dashboard error)."
             else:
-                status_msg += " | No violations detected."
+                status_msg += " | ✅ No violations detected."
             
             return output_path, violations_df, dashboard_path, csv_path, status_msg
             
         except Exception as e:
-            error_msg = f"Error processing video: {str(e)}"
+            error_msg = f"❌ Error processing video: {str(e)}"
+            print(f"Video processing error: {e}")
             return None, pd.DataFrame(), None, None, error_msg
     
     def clear_violation_logs(self):
@@ -113,52 +123,35 @@ class TrafficViolationInterface:
         try:
             summary = self.image_processor.detector.logger.get_csv_summary()
             summary_text = f"""
-            📊 **Violation Log Summary:**
-            - Total Violations: {summary['total_violations']}
-            - Repeat Offenders: {summary['repeat_offenders']}
-            - Latest Violation: {summary['latest_violation']}
-            
-            **Violation Types:**
-            """
+📊 **Violation Log Summary:**
+- Total Violations: {summary['total_violations']}
+- Repeat Offenders: {summary['repeat_offenders']}
+- Latest Violation: {summary['latest_violation']}
+**Violation Types:**
+"""
             for vtype, count in summary['violation_types'].items():
                 summary_text += f"\n- {vtype.replace('_', ' ').title()}: {count}"
             
+            if summary['total_violations'] == 0:
+                summary_text = "📊 **No violations recorded yet.**"
+            
             return summary_text
         except Exception as e:
-            return f"Error getting summary: {str(e)}"
+            return f"❌ Error getting summary: {str(e)}"
 
 def create_interface(image_processor, video_processor):
     """Create enhanced Gradio interface"""
     interface = TrafficViolationInterface(image_processor, video_processor)
     
-    # Custom CSS for better styling
-    custom_css = """
-    .violation-info {
-        background: linear-gradient(90deg, #ff6b6b, #ffa500);
-        color: white;
-        padding: 10px;
-        border-radius: 5px;
-        margin: 10px 0;
-    }
-    .status-message {
-        background: #e8f5e8;
-        border-left: 4px solid #4caf50;
-        padding: 10px;
-        margin: 10px 0;
-    }
-    """
-    
-    with gr.Blocks(title="Enhanced Traffic Violation Detection System", 
-                   theme=gr.themes.Soft(), css=custom_css) as iface:
+    with gr.Blocks(title="Enhanced Traffic Violation Detection System", theme=gr.themes.Soft()) as iface:
         
         gr.Markdown("# 🚦 Enhanced Traffic Violation Detection System")
-        gr.Markdown("Upload images or videos to detect traffic violations with automatic violation line detection and enhanced features")
+        gr.Markdown("Upload images or videos to detect traffic violations with automatic violation line detection")
         
         # Add summary section at the top
         with gr.Row():
-            with gr.Column():
-                summary_btn = gr.Button("📊 Get Log Summary", variant="secondary")
-                summary_output = gr.Markdown()
+            summary_btn = gr.Button("📊 Get Log Summary", variant="secondary", size="sm")
+            summary_output = gr.Markdown()
         
         with gr.Tabs():
             with gr.TabItem("📸 Image Analysis"):
@@ -168,7 +161,7 @@ def create_interface(image_processor, video_processor):
                         
                         with gr.Group():
                             gr.Markdown("### ⚙️ Violation Line Setup")
-                            gr.Markdown("**Auto-detection is enabled by default.** Manual input overrides auto-detection.")
+                            gr.Markdown("**Auto-detection enabled by default.** Manual input overrides auto-detection.")
                             line_input = gr.Textbox(
                                 label="Manual Violation Line (Optional)", 
                                 placeholder="[(x1,y1), (x2,y2)] - Leave empty for auto-detection",
@@ -180,13 +173,13 @@ def create_interface(image_processor, video_processor):
                             enable_plates = gr.Checkbox(
                                 label="Enable Enhanced License Plate Detection", 
                                 value=True,
-                                info="Uses improved OCR with preprocessing for Indian license plates"
+                                info="Improved OCR for Indian license plates"
                             )
                         
                         process_img_btn = gr.Button("🔍 Analyze Image", variant="primary", size="lg")
                         
                         # Status message
-                        img_status = gr.Markdown(label="Status")
+                        img_status = gr.Markdown("Ready to process images...")
                     
                     with gr.Column(scale=2):
                         output_image = gr.Image(label="Processed Image with Detections")
@@ -196,7 +189,8 @@ def create_interface(image_processor, video_processor):
                                 violations_table = gr.Dataframe(
                                     label="🚨 Detected Violations",
                                     wrap=True,
-                                    interactive=False
+                                    interactive=False,
+                                    height=300
                                 )
                                 csv_download = gr.File(label="📥 Download Complete Log (CSV)")
                             with gr.Column():
@@ -209,7 +203,7 @@ def create_interface(image_processor, video_processor):
                         
                         with gr.Group():
                             gr.Markdown("### ⚙️ Violation Line Setup")
-                            gr.Markdown("**Auto-detection is enabled by default.** Manual input overrides auto-detection.")
+                            gr.Markdown("**Auto-detection enabled by default.** Manual input overrides auto-detection.")
                             line_input_video = gr.Textbox(
                                 label="Manual Violation Line (Optional)", 
                                 placeholder="[(x1,y1), (x2,y2)] - Leave empty for auto-detection",
@@ -221,17 +215,17 @@ def create_interface(image_processor, video_processor):
                             enable_plates_video = gr.Checkbox(
                                 label="Enable Enhanced License Plate Detection", 
                                 value=True,
-                                info="Uses improved OCR with preprocessing for Indian license plates"
+                                info="Improved OCR for Indian license plates"
                             )
                         
                         process_vid_btn = gr.Button("🎬 Analyze Video", variant="primary", size="lg")
                         
                         # Status message
-                        vid_status = gr.Markdown(label="Status")
+                        vid_status = gr.Markdown("Ready to process videos...")
                     
                     with gr.Column(scale=2):
                         output_video = gr.Video(
-                            label="Processed Video with Enhanced Timeline Markers",
+                            label="Processed Video with Enhanced Markers",
                             show_download_button=True
                         )
                         
@@ -240,7 +234,8 @@ def create_interface(image_processor, video_processor):
                                 violations_table_video = gr.Dataframe(
                                     label="🚨 Detected Violations",
                                     wrap=True,
-                                    interactive=False
+                                    interactive=False,
+                                    height=300
                                 )
                                 csv_download_video = gr.File(label="📥 Download Complete Log (CSV)")
                             with gr.Column():
@@ -251,57 +246,50 @@ def create_interface(image_processor, video_processor):
             with gr.Column():
                 gr.Markdown("### 🗂️ Log Management")
                 with gr.Row():
-                    clear_btn = gr.Button("🗑️ Clear All Violation Logs", variant="stop")
-                    refresh_btn = gr.Button("🔄 Refresh Summary", variant="secondary")
+                    clear_btn = gr.Button("🗑️ Clear All Violation Logs", variant="stop", size="sm")
+                    refresh_btn = gr.Button("🔄 Refresh Summary", variant="secondary", size="sm")
                 
                 clear_status = gr.Markdown()
         
         # Enhanced feature description
         with gr.Accordion("📋 Enhanced Features & Usage Guide", open=False):
             gr.Markdown("""
-            ### 🚀 **New Enhanced Features:**
+            ### 🚀 **Enhanced Features:**
             
             #### 🤖 **Automatic Violation Line Detection**
             - Automatically detects zebra crossings and road markings
             - Creates violation line before crossings for red light detection
-            - Manual input still available as override option
+            - Manual input available as override option
             
             #### 🔍 **Improved License Plate Detection**
             - Enhanced OCR with preprocessing for Indian license plates
             - Better handling of varied fonts, backgrounds, and lighting
-            - Supports both old and new Indian license plate formats
+            - Supports multiple Indian license plate formats
             
             #### 🚗 **Fixed Speed Detection**
-            - Accurate speed calculation based on pixel movement and time
-            - Configurable speed limit (default: 40 km/h)
+            - Accurate speed calculation with configurable limits
             - Eliminates false speeding violations
-            - Vehicle tracking across frames for better accuracy
+            - Default speed limit: 40 km/h
             
-            #### 📊 **Enhanced CSV & Screenshot Management**
-            - Screenshots automatically saved and displayed
-            - Repeat offender detection based on license plate history
-            - Sortable and scrollable violation table in UI
-            - Clear logs functionality while preserving file structure
-            
-            #### 🎥 **Improved Video Timeline Markers**
-            - High-visibility violation markers in video timeline
-            - Enhanced frame-by-frame violation indicators
-            - Better progress tracking during processing
+            #### 📊 **Enhanced Management**
+            - Screenshots automatically saved and linked
+            - Repeat offender detection based on license plates
+            - CSV logs with complete violation history
+            - Clear logs functionality
             
             ### 📖 **Usage Instructions:**
             
             1. **Upload** your traffic image or video
-            2. **Violation Line**: Leave empty for auto-detection, or manually specify coordinates
-            3. **Enable** license plate detection for complete violation logging
-            4. **Process** and review detected violations in the enhanced UI
-            5. **Download** CSV logs with complete violation history
-            6. **Manage** logs using the clear/refresh options
+            2. **Violation Line**: Leave empty for auto-detection, or specify coordinates manually
+            3. **Enable** license plate detection for complete logging
+            4. **Process** and review detected violations
+            5. **Download** CSV logs or clear history as needed
             
             ### 🔧 **Detection Types:**
             - **Red Light Violations**: Vehicles crossing violation line during red light
             - **No Helmet Violations**: Motorcycle/bicycle riders without helmets  
-            - **Speeding Violations**: Vehicles exceeding speed limit (>40 km/h)
-            - **Repeat Offender Tracking**: Based on license plate matching
+            - **Speeding Violations**: Vehicles exceeding speed limit
+            - **Repeat Offender Tracking**: Based on license plate history
             
             ### 📝 **Line Format Examples:**
             - Horizontal: `[(50, 300), (650, 300)]`
