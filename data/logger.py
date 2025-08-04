@@ -11,7 +11,6 @@ class ViolationLogger:
         self.screenshot_dir = os.path.join(Config.TEMP_DIR, "violation_screenshots")
         
         # Ensure directories exist
-        Config.ensure_data_dir()
         Config.ensure_temp_dir()
         os.makedirs(self.screenshot_dir, exist_ok=True)
         
@@ -24,24 +23,27 @@ class ViolationLogger:
             headers = [
                 'timestamp', 'violation_type', 'vehicle_type', 'confidence',
                 'speed', 'license_plate', 'frame_no', 'screenshot_path',
-                'repeat_offender', 'screenshot_display'
+                'repeat_offender'
             ]
             df = pd.DataFrame(columns=headers)
-            df.to_csv(self.csv_file, index=False)
+            try:
+                df.to_csv(self.csv_file, index=False)
+            except Exception as e:
+                print(f"Warning: Could not create CSV file: {e}")
     
     def log_violation(self, timestamp, violation_type, vehicle_type, confidence, 
                      speed, license_plate, frame_no, screenshot_path, repeat_offender):
-        """Log a violation to memory with screenshot display handling"""
+        """Log a violation to memory"""
         
         # Copy screenshot to persistent location if it exists
         screenshot_display_path = ""
         if screenshot_path and os.path.exists(screenshot_path):
-            # Create a unique filename
-            timestamp_clean = timestamp.replace(':', '-').replace(' ', '_').replace('.', '_')
-            screenshot_filename = f"{violation_type}_{timestamp_clean}_{frame_no}.jpg"
-            persistent_screenshot_path = os.path.join(self.screenshot_dir, screenshot_filename)
-            
             try:
+                # Create a unique filename
+                timestamp_clean = timestamp.replace(':', '-').replace(' ', '_').replace('.', '_')
+                screenshot_filename = f"{violation_type}_{timestamp_clean}_{frame_no}.jpg"
+                persistent_screenshot_path = os.path.join(self.screenshot_dir, screenshot_filename)
+                
                 shutil.copy2(screenshot_path, persistent_screenshot_path)
                 screenshot_display_path = persistent_screenshot_path
             except Exception as e:
@@ -80,7 +82,7 @@ class ViolationLogger:
             return False
     
     def save_violations_to_csv(self):
-        """Save violations to CSV file with proper handling of existing data"""
+        """Save violations to CSV file"""
         if not self.violations_log:
             return self.csv_file if os.path.exists(self.csv_file) else None
         
@@ -91,7 +93,7 @@ class ViolationLogger:
             if os.path.exists(self.csv_file):
                 try:
                     existing_df = pd.read_csv(self.csv_file)
-                    # Ensure both dataframes have the same columns
+                    # Ensure compatibility with existing CSV structure
                     for col in new_df.columns:
                         if col not in existing_df.columns:
                             existing_df[col] = ""
@@ -125,7 +127,7 @@ class ViolationLogger:
             headers = [
                 'timestamp', 'violation_type', 'vehicle_type', 'confidence',
                 'speed', 'license_plate', 'frame_no', 'screenshot_path',
-                'repeat_offender', 'screenshot_display'
+                'repeat_offender'
             ]
             df = pd.DataFrame(columns=headers)
             df.to_csv(self.csv_file, index=False)
@@ -151,28 +153,31 @@ class ViolationLogger:
         if not self.violations_log:
             return pd.DataFrame()
         
-        df = pd.DataFrame(self.violations_log)
-        
-        # Reorder columns for better display
-        display_columns = [
-            'timestamp', 'violation_type', 'vehicle_type', 
-            'license_plate', 'speed', 'confidence', 'repeat_offender',
-            'frame_no', 'screenshot_display'
-        ]
-        
-        # Only include columns that exist
-        available_columns = [col for col in display_columns if col in df.columns]
-        df_display = df[available_columns].copy()
-        
-        # Format for better readability
-        if 'confidence' in df_display.columns:
-            df_display['confidence'] = df_display['confidence'].round(3)
-        if 'speed' in df_display.columns:
-            df_display['speed'] = df_display['speed'].apply(lambda x: f"{x:.1f} km/h" if x > 0 else "N/A")
-        if 'repeat_offender' in df_display.columns:
-            df_display['repeat_offender'] = df_display['repeat_offender'].apply(lambda x: "Yes" if x else "No")
-        
-        return df_display
+        try:
+            df = pd.DataFrame(self.violations_log)
+            
+            # Reorder columns for better display
+            display_columns = [
+                'timestamp', 'violation_type', 'vehicle_type', 
+                'license_plate', 'speed', 'confidence', 'repeat_offender', 'frame_no'
+            ]
+            
+            # Only include columns that exist
+            available_columns = [col for col in display_columns if col in df.columns]
+            df_display = df[available_columns].copy()
+            
+            # Format for better readability
+            if 'confidence' in df_display.columns:
+                df_display['confidence'] = df_display['confidence'].round(3)
+            if 'speed' in df_display.columns:
+                df_display['speed'] = df_display['speed'].apply(lambda x: f"{x:.1f} km/h" if x > 0 else "N/A")
+            if 'repeat_offender' in df_display.columns:
+                df_display['repeat_offender'] = df_display['repeat_offender'].apply(lambda x: "Yes" if x else "No")
+            
+            return df_display
+        except Exception as e:
+            print(f"Error creating violations dataframe: {e}")
+            return pd.DataFrame()
     
     def get_csv_summary(self):
         """Get summary statistics from the CSV file"""
