@@ -42,7 +42,8 @@ pip install -r requirements.txt
 
 ## 3. Run the Application
 python m.py
-🧠 Detection Modules
+
+## 🧠 Detection Modules
 Type	Description
 Helmet	Checks for helmets on riders and passengers
 Red Light	Detects red-light crossing using HSV + violation line
