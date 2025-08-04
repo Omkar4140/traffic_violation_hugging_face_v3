@@ -37,10 +37,10 @@ An AI-based system that detects multiple types of traffic violations using compu
 git clone https://github.com/Omkar4140/traffic_violation_hugging_face_v3.git
 cd traffic_violation_hugging_face_v3
 
-###2. Install Dependencies
+## 2. Install Dependencies
 pip install -r requirements.txt
 
-###3. Run the Application
+## 3. Run the Application
 python m.py
 🧠 Detection Modules
 Type	Description
@@ -69,7 +69,7 @@ Gradio – Web Interface
 Pandas, Matplotlib – Data Handling and Visualization
 
 
-###🌐 Live Demo
+### 🌐 Live Demo
 🧪 Try the Web App:
 👉 https://huggingface.co/spaces/Omkar4141/traffic_violation_v3
 📌 Note
