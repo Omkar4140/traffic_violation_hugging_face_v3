@@ -73,5 +73,6 @@ Pandas, Matplotlib – Data Handling and Visualization
 ### 🌐 Live Demo
 🧪 Try the Web App:
 👉 https://huggingface.co/spaces/Omkar4141/traffic_violation_v3
+
 📌 Note
 This project is under active development and may be extended with cloud support, mobile app integration, and improved real-time processing.
