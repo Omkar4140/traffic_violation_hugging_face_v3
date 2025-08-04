@@ -41,7 +41,7 @@ cd traffic_violation_hugging_face_v3
 pip install -r requirements.txt
 
 ## 3. Run the Application
-python m.py
+python main.py
 
 ## 🧠 Detection Modules
 Type	Description
