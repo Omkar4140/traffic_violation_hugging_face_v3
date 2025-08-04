@@ -18,7 +18,7 @@ class Config:
     NEARBY_VEHICLE_DISTANCE = 100
     
     # File paths
-    CSV_LOG_FILE = "data/violations.csv"
+    CSV_LOG_FILE = "violation_log.csv"  # Keep original filename
     TEMP_DIR = os.path.join(os.getcwd(), "temp")
     
     # Video processing
@@ -29,7 +29,7 @@ class Config:
     # Calibration
     CALIBRATION_DISTANCE = 3.5
     
-    # Zebra crossing detection
+    # Zebra crossing detection - with safer defaults
     ZEBRA_CROSSING_MIN_AREA = 1000
     ZEBRA_CROSSING_WHITE_THRESHOLD = 200
     
@@ -40,6 +40,5 @@ class Config:
     
     @classmethod
     def ensure_data_dir(cls):
-        data_dir = os.path.dirname(cls.CSV_LOG_FILE)
-        os.makedirs(data_dir, exist_ok=True)
-        return data_dir
+        # For backward compatibility, don't create data subdirectory
+        return os.getcwd()
